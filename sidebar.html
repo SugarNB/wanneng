@@ -43,18 +43,6 @@
       </div>
     </header>
 
-    <nav class="tabs-container">
-      <div class="tabs-scroll">
-        <div id="tabsList" class="tabs-list"></div>
-      </div>
-      <button id="addTab" class="add-tab-btn" title="新建标签">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19"></line>
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-        </svg>
-      </button>
-    </nav>
-
     <div class="toolbar">
       <div class="nav-buttons">
         <button id="goBack" class="icon-btn small" title="后退">
@@ -108,6 +96,8 @@
       </div>
       <iframe id="webview" class="webview" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
     </main>
+
+    <div id="panelBackdrop" class="panel-backdrop hidden"></div>
 
     <div id="aiSidebar" class="ai-sidebar">
       <div class="ai-sidebar-header">

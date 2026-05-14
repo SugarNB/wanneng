@@ -1,4 +1,8 @@
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'ping') {
+    sendResponse({ pong: true });
+  }
+
   if (request.action === 'extractContent') {
     const content = extractPageContent();
     sendResponse({ content });
@@ -162,7 +166,49 @@ function tableToMarkdown(table) {
   return rows.join('\n');
 }
 
+function showContentToast(message) {
+  const existing = document.querySelector('.content-screenshot-toast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.className = 'content-screenshot-toast';
+  toast.textContent = message;
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1e293b;
+    color: #fff;
+    padding: 10px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    z-index: 2147483647;
+    pointer-events: none;
+    animation: contentToastFade 2.5s ease forwards;
+  `;
+
+  if (!document.querySelector('#content-toast-style')) {
+    const style = document.createElement('style');
+    style.id = 'content-toast-style';
+    style.textContent = `
+      @keyframes contentToastFade {
+        0% { opacity: 0; transform: translateX(-50%) translateY(16px); }
+        15% { opacity: 1; transform: translateX(-50%) translateY(0); }
+        75% { opacity: 1; }
+        100% { opacity: 0; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2500);
+}
+
 function startAreaCapture() {
+  document.querySelectorAll('#screenshot-overlay, #screenshot-selection').forEach(el => el.remove());
+
   const overlay = document.createElement('div');
   overlay.id = 'screenshot-overlay';
   overlay.style.cssText = `
@@ -184,6 +230,7 @@ function startAreaCapture() {
     background: rgba(255, 255, 255, 0.1);
     display: none;
     z-index: 2147483647;
+    pointer-events: none;
   `;
 
   document.body.appendChild(overlay);
@@ -191,16 +238,29 @@ function startAreaCapture() {
 
   let startX, startY, isDrawing = false;
 
-  overlay.addEventListener('mousedown', (e) => {
+  function cleanup() {
+    overlay.remove();
+    selection.remove();
+    document.removeEventListener('mousedown', onMouseDown, true);
+    document.removeEventListener('mousemove', onMouseMove, true);
+    document.removeEventListener('mouseup', onMouseUp, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+  }
+
+  function onMouseDown(e) {
+    if (e.button !== 0) return;
     isDrawing = true;
     startX = e.clientX;
     startY = e.clientY;
     selection.style.left = startX + 'px';
     selection.style.top = startY + 'px';
+    selection.style.width = '0';
+    selection.style.height = '0';
     selection.style.display = 'block';
-  });
+    e.preventDefault();
+  }
 
-  overlay.addEventListener('mousemove', (e) => {
+  function onMouseMove(e) {
     if (!isDrawing) return;
 
     const x = Math.min(e.clientX, startX);
@@ -212,28 +272,30 @@ function startAreaCapture() {
     selection.style.top = y + 'px';
     selection.style.width = width + 'px';
     selection.style.height = height + 'px';
-  });
+  }
 
-  overlay.addEventListener('mouseup', (e) => {
+  function onMouseUp(e) {
     if (!isDrawing) return;
     isDrawing = false;
 
     const rect = selection.getBoundingClientRect();
-
-    overlay.remove();
-    selection.remove();
+    cleanup();
 
     if (rect.width > 10 && rect.height > 10) {
       captureArea(rect);
     }
-  });
+  }
 
-  overlay.addEventListener('keydown', (e) => {
+  function onKeyDown(e) {
     if (e.key === 'Escape') {
-      overlay.remove();
-      selection.remove();
+      cleanup();
     }
-  });
+  }
+
+  document.addEventListener('mousedown', onMouseDown, true);
+  document.addEventListener('mousemove', onMouseMove, true);
+  document.addEventListener('mouseup', onMouseUp, true);
+  document.addEventListener('keydown', onKeyDown, true);
 }
 
 function captureArea(rect) {
@@ -268,12 +330,21 @@ function cropImage(dataUrl, rect) {
       rect.height * scale
     );
 
-    const croppedDataUrl = canvas.toDataURL('image/png');
-
-    const link = document.createElement('a');
-    link.download = `screenshot-${Date.now()}.png`;
-    link.href = croppedDataUrl;
-    link.click();
+    canvas.toBlob(async (blob) => {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': blob })
+        ]);
+        showContentToast('已复制到剪贴板');
+      } catch (e) {
+        const link = document.createElement('a');
+        link.download = `screenshot-${Date.now()}.png`;
+        link.href = URL.createObjectURL(blob);
+        link.click();
+        URL.revokeObjectURL(link.href);
+        showContentToast('已保存为图片');
+      }
+    }, 'image/png');
   };
   img.src = dataUrl;
 }

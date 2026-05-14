@@ -9,8 +9,6 @@ const DEFAULT_AI_LIST = [
 ];
 
 let state = {
-  tabs: [],
-  activeTabId: null,
   aiList: [],
   settings: {
     linkOpenMode: 'inside',
@@ -27,21 +25,15 @@ const $$ = (sel) => document.querySelectorAll(sel);
 async function init() {
   await loadState();
   applyTheme();
-  renderTabs();
   renderAiList();
   setupEventListeners();
 
-  if (state.tabs.length === 0) {
-    addNewTab(state.settings.defaultHome);
-  } else {
-    switchTab(state.activeTabId || state.tabs[0].id);
-  }
+  navigateTo(state.settings.defaultHome);
 }
 
 async function loadState() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(['tabs', 'aiList', 'settings', 'zoomLevel'], (result) => {
-      state.tabs = result.tabs || [];
+    chrome.storage.local.get(['aiList', 'settings', 'zoomLevel'], (result) => {
       state.aiList = result.aiList || DEFAULT_AI_LIST;
       state.settings = { ...state.settings, ...result.settings };
       state.zoomLevel = result.zoomLevel || 100;
@@ -52,8 +44,6 @@ async function loadState() {
 
 function saveState() {
   chrome.storage.local.set({
-    tabs: state.tabs,
-    activeTabId: state.activeTabId,
     aiList: state.aiList,
     settings: state.settings,
     zoomLevel: state.zoomLevel
@@ -73,74 +63,6 @@ function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
-function addNewTab(url = 'about:blank') {
-  const tab = {
-    id: generateId(),
-    url: url,
-    title: '新标签页',
-    scrollPos: 0
-  };
-  state.tabs.push(tab);
-  switchTab(tab.id);
-  saveState();
-  renderTabs();
-}
-
-function closeTab(tabId) {
-  if (state.tabs.length <= 1) return;
-  
-  const index = state.tabs.findIndex(t => t.id === tabId);
-  state.tabs.splice(index, 1);
-  
-  if (state.activeTabId === tabId) {
-    const newIndex = Math.min(index, state.tabs.length - 1);
-    switchTab(state.tabs[newIndex].id);
-  }
-  
-  saveState();
-  renderTabs();
-}
-
-function switchTab(tabId) {
-  const tab = state.tabs.find(t => t.id === tabId);
-  if (!tab) return;
-  
-  const currentTab = state.tabs.find(t => t.id === state.activeTabId);
-  if (currentTab) {
-    const webview = $('#webview');
-    currentTab.scrollPos = webview.contentWindow?.scrollY || 0;
-  }
-  
-  state.activeTabId = tabId;
-  saveState();
-  renderTabs();
-  navigateTo(tab.url);
-}
-
-function renderTabs() {
-  const tabsList = $('#tabsList');
-  tabsList.innerHTML = state.tabs.map(tab => `
-    <div class="tab ${tab.id === state.activeTabId ? 'active' : ''}" data-id="${tab.id}">
-      <span class="tab-title">${escapeHtml(tab.title)}</span>
-      <button class="tab-close" data-id="${tab.id}" title="关闭标签">×</button>
-    </div>
-  `).join('');
-  
-  tabsList.querySelectorAll('.tab').forEach(el => {
-    el.addEventListener('click', (e) => {
-      if (!e.target.classList.contains('tab-close')) {
-        switchTab(el.dataset.id);
-      }
-    });
-  });
-  
-  tabsList.querySelectorAll('.tab-close').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeTab(btn.dataset.id);
-    });
-  });
-}
 
 function renderAiList() {
   const aiList = $('#aiList');
@@ -159,6 +81,7 @@ function renderAiList() {
         const ai = state.aiList[index];
         navigateTo(ai.url);
         $('#aiSidebar').classList.remove('open');
+        updateBackdrop();
       }
     });
   });
@@ -190,7 +113,6 @@ function navigateTo(url) {
   const webview = $('#webview');
   const loading = $('#loading');
 
-  // If iframe already loaded with the same URL, skip reload
   if (webview.src === url && webview.contentDocument?.readyState === 'complete') {
     $('#urlInput').value = url;
     return;
@@ -200,22 +122,6 @@ function navigateTo(url) {
 
   webview.onload = () => {
     loading.classList.add('hidden');
-    const tab = state.tabs.find(t => t.id === state.activeTabId);
-    if (tab) {
-      tab.url = url;
-      try {
-        tab.title = webview.contentDocument?.title || url;
-      } catch (e) {
-        tab.title = url;
-      }
-      saveState();
-      renderTabs();
-    }
-
-    const currentTab = state.tabs.find(t => t.id === state.activeTabId);
-    if (currentTab?.scrollPos) {
-      webview.contentWindow.scrollTo(0, currentTab.scrollPos);
-    }
   };
 
   webview.onerror = () => {
@@ -225,6 +131,12 @@ function navigateTo(url) {
 
   webview.src = url;
   $('#urlInput').value = url;
+}
+
+function updateBackdrop() {
+  const sidebarOpen = $('#aiSidebar').classList.contains('open');
+  const settingsOpen = !$('#settingsPanel').classList.contains('hidden');
+  $('#panelBackdrop').classList.toggle('hidden', !sidebarOpen && !settingsOpen);
 }
 
 function showToast(message) {
@@ -246,8 +158,6 @@ function escapeHtml(text) {
 }
 
 function setupEventListeners() {
-  $('#addTab').addEventListener('click', () => addNewTab());
-  
   $('#urlInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       navigateTo(e.target.value);
@@ -304,13 +214,15 @@ function setupEventListeners() {
   
   $('#settingsBtn').addEventListener('click', () => {
     $('#settingsPanel').classList.toggle('hidden');
+    updateBackdrop();
     $('#themeMode').value = state.settings.theme || 'light';
     $('#linkOpenMode').value = state.settings.linkOpenMode;
     $('#defaultHome').value = state.settings.defaultHome;
   });
-  
+
   $('#closeSettings').addEventListener('click', () => {
     $('#settingsPanel').classList.add('hidden');
+    updateBackdrop();
   });
   
   $('#saveSettings').addEventListener('click', () => {
@@ -325,10 +237,18 @@ function setupEventListeners() {
   
   $('#sidebarToggle').addEventListener('click', () => {
     $('#aiSidebar').classList.toggle('open');
+    updateBackdrop();
   });
-  
+
   $('#closeAiSidebar').addEventListener('click', () => {
     $('#aiSidebar').classList.remove('open');
+    updateBackdrop();
+  });
+
+  $('#panelBackdrop').addEventListener('click', () => {
+    $('#aiSidebar').classList.remove('open');
+    $('#settingsPanel').classList.add('hidden');
+    updateBackdrop();
   });
   
   $('#addCustomAi').addEventListener('click', () => {
@@ -384,7 +304,6 @@ function setupEventListeners() {
     }
   });
 
-  setupResizeHandle();
 }
 
 function applyZoom() {
@@ -403,19 +322,35 @@ function toggleFullscreen() {
   $('#exitFullscreen').classList.toggle('hidden', !state.isFullscreen);
 }
 
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+  } catch (e) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content.js']
+    });
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      files: ['content.css']
+    });
+  }
+}
+
 async function extractPageContent() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) return;
-    
+
+    await ensureContentScript(tab.id);
     const response = await chrome.tabs.sendMessage(tab.id, { action: 'extractContent' });
-    
+
     if (response?.content) {
       $('#contentText').textContent = response.content;
       $('#contentViewer').classList.remove('hidden');
     }
   } catch (e) {
-    showToast('无法提取页面内容，请确保页面已加载');
+    showToast('无法提取页面内容');
   }
 }
 
@@ -423,7 +358,8 @@ async function startAreaCapture() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) return;
-    
+
+    await ensureContentScript(tab.id);
     await chrome.tabs.sendMessage(tab.id, { action: 'startAreaCapture' });
     showToast('请在页面上拖拽选择截屏区域');
   } catch (e) {
@@ -431,32 +367,6 @@ async function startAreaCapture() {
   }
 }
 
-function setupResizeHandle() {
-  const handle = document.createElement('div');
-  handle.className = 'resize-handle';
-  document.body.appendChild(handle);
-  
-  let startX = 0;
-  let startWidth = 0;
-  
-  handle.addEventListener('mousedown', (e) => {
-    startX = e.clientX;
-    startWidth = document.body.offsetWidth;
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  });
-  
-  function onMouseMove(e) {
-    const diff = startX - e.clientX;
-    const newWidth = Math.max(300, Math.min(800, startWidth + diff));
-    document.body.style.width = `${newWidth}px`;
-  }
-  
-  function onMouseUp() {
-    document.removeEventListener('mousemove', onMouseMove);
-    document.removeEventListener('mouseup', onMouseUp);
-  }
-}
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'restoreState') {
