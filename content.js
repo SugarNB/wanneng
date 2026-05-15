@@ -12,7 +12,85 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     startAreaCapture();
     sendResponse({ success: true });
   }
+
+  if (request.action === 'getPageSource') {
+    sendResponse({ html: document.documentElement.outerHTML });
+  }
+
+  if (request.action === 'getCurrentUrl') {
+    sendResponse({ url: window.location.href, title: document.title });
+  }
 });
+
+// --- URL Change Detection ---
+// Only run in iframes (not the main page)
+if (window !== window.top) {
+  let lastUrl = '';
+  let lastTitle = '';
+
+  function notifyUrlChange() {
+    const currentUrl = window.location.href;
+    const currentTitle = document.title || '';
+
+    // Skip if URL is empty, about:blank, or hasn't changed
+    if (!currentUrl || currentUrl === 'about:blank' || currentUrl.startsWith('about:')) {
+      return;
+    }
+
+    if (currentUrl !== lastUrl || currentTitle !== lastTitle) {
+      lastUrl = currentUrl;
+      lastTitle = currentTitle;
+
+      // Notify parent (sidebar) via postMessage
+      try {
+        window.parent.postMessage({
+          action: 'urlChanged',
+          url: currentUrl,
+          title: currentTitle
+        }, '*');
+      } catch (e) {
+        // May fail if parent is different origin
+      }
+    }
+  }
+
+  // Listen for popstate (back/forward navigation)
+  window.addEventListener('popstate', notifyUrlChange);
+
+  // Listen for pushstate/replacestate (SPA navigation)
+  try {
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+
+    history.pushState = function() {
+      originalPushState.apply(this, arguments);
+      setTimeout(notifyUrlChange, 100);
+    };
+
+    history.replaceState = function() {
+      originalReplaceState.apply(this, arguments);
+      setTimeout(notifyUrlChange, 100);
+    };
+  } catch (e) {
+    // Some pages may block this
+  }
+
+  // Periodic check as fallback
+  setInterval(notifyUrlChange, 1000);
+
+  // Check on page load
+  window.addEventListener('load', () => {
+    setTimeout(notifyUrlChange, 500);
+  });
+
+  // Check on DOMContentLoaded
+  window.addEventListener('DOMContentLoaded', () => {
+    setTimeout(notifyUrlChange, 100);
+  });
+
+  // Initial notification
+  setTimeout(notifyUrlChange, 200);
+}
 
 function extractPageContent() {
   const article = document.querySelector('article') ||
@@ -348,3 +426,159 @@ function cropImage(dataUrl, rect) {
   };
   img.src = dataUrl;
 }
+
+// --- Draft Auto-Save ---
+let draftKey = null;
+let draftDebounceTimer = null;
+
+const DRAFT_SAVE_DELAY = 1000;
+const DRAFT_MAX_LENGTH = 50000;
+
+async function initDraftSystem() {
+  const result = await chrome.storage.local.get('currentTabId');
+  draftKey = result.currentTabId
+    ? `draft_${result.currentTabId}`
+    : `draft_${window.location.href}`;
+
+  restoreDraft();
+  setupDraftListeners();
+}
+
+function setupDraftListeners() {
+  document.addEventListener('input', onDraftInput, true);
+  observeSendActions();
+}
+
+function onDraftInput(e) {
+  const target = e.target;
+  if (!isDraftableElement(target)) return;
+
+  clearTimeout(draftDebounceTimer);
+  draftDebounceTimer = setTimeout(() => {
+    saveDraft(target);
+  }, DRAFT_SAVE_DELAY);
+}
+
+function isDraftableElement(el) {
+  if (!el) return false;
+  if (el.tagName === 'TEXTAREA') return true;
+  if (el.isContentEditable) return true;
+  if (el.getAttribute('role') === 'textbox') return true;
+  if (el.tagName === 'INPUT' && el.type === 'text' && el.offsetHeight > 50) return true;
+  return false;
+}
+
+function getDraftContent(el) {
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+    return el.value;
+  }
+  if (el.isContentEditable) {
+    return el.innerText;
+  }
+  return '';
+}
+
+function setDraftContent(el, content) {
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+    el.value = content;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  if (el.isContentEditable) {
+    el.innerText = content;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+}
+
+function saveDraft(el) {
+  const content = getDraftContent(el);
+  if (!content || content.length > DRAFT_MAX_LENGTH) return;
+
+  chrome.storage.local.set({
+    [draftKey]: {
+      content: content,
+      timestamp: Date.now(),
+      url: window.location.href
+    }
+  });
+}
+
+async function restoreDraft() {
+  const result = await chrome.storage.local.get(draftKey);
+  const draft = result[draftKey];
+  if (!draft || !draft.content) return;
+
+  if (Date.now() - draft.timestamp > 24 * 60 * 60 * 1000) {
+    chrome.storage.local.remove(draftKey);
+    return;
+  }
+
+  waitForDraftableElement((el) => {
+    const currentContent = getDraftContent(el);
+    if (!currentContent || currentContent.trim() === '') {
+      setDraftContent(el, draft.content);
+    }
+  });
+}
+
+function waitForDraftableElement(callback, maxAttempts = 20) {
+  let attempts = 0;
+
+  function tryFind() {
+    attempts++;
+    const selectors = [
+      'textarea',
+      '[contenteditable="true"]',
+      '[role="textbox"]',
+      '#prompt-textarea',
+      '.chat-input',
+      '[data-testid*="input"]',
+    ];
+
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && isDraftableElement(el)) {
+        callback(el);
+        return;
+      }
+    }
+
+    if (attempts < maxAttempts) {
+      setTimeout(tryFind, 500);
+    }
+  }
+
+  setTimeout(tryFind, 1000);
+}
+
+function observeSendActions() {
+  document.addEventListener('submit', clearCurrentDraft, true);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && isDraftableElement(e.target)) {
+      setTimeout(() => clearCurrentDraft(), 500);
+    }
+  }, true);
+
+  document.addEventListener('click', (e) => {
+    const target = e.target;
+    const isSendButton = target.closest(
+      'button[data-testid*="send"], ' +
+      'button[aria-label*="Send"], ' +
+      'button[aria-label*="send"], ' +
+      'button[aria-label*="发送"], ' +
+      '.send-button, ' +
+      '[data-testid="send-button"]'
+    );
+    if (isSendButton) {
+      setTimeout(() => clearCurrentDraft(), 500);
+    }
+  }, true);
+}
+
+function clearCurrentDraft() {
+  if (draftKey) {
+    chrome.storage.local.remove(draftKey);
+  }
+}
+
+initDraftSystem();

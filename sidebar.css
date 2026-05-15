@@ -86,6 +86,11 @@ body {
   height: 28px;
 }
 
+.icon-btn.active {
+  background: var(--primary);
+  color: white;
+}
+
 .header-right {
   display: flex;
   gap: 4px;
@@ -103,6 +108,11 @@ body {
 .nav-buttons {
   display: flex;
   gap: 2px;
+}
+
+.icon-btn.disabled {
+  opacity: 0.3;
+  pointer-events: none;
 }
 
 .url-bar {
@@ -138,16 +148,129 @@ body {
   text-align: center;
 }
 
+.tab-bar {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  gap: 2px;
+  min-height: 34px;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px 6px 0 0;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 120px;
+  min-width: 60px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+}
+
+.tab-item:hover {
+  background: var(--bg);
+}
+
+.tab-item.active {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.tab-close {
+  display: none;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.tab-item:hover .tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab-close:hover {
+  background: #fee2e2;
+  color: #ef4444;
+}
+
+[data-theme="dark"] .tab-close:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.tab-add {
+  width: 24px;
+  height: 24px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.tab-add:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.fullscreen .tab-bar {
+  display: none;
+}
+
 .content-area {
   flex: 1;
   position: relative;
   overflow: hidden;
 }
 
-.webview {
+.webview-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.webview-frame {
   width: 100%;
   height: 100%;
   border: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.webview-frame.hidden {
+  display: none;
 }
 
 .loading {
