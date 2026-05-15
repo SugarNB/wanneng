@@ -16,7 +16,6 @@ const DEFAULT_AI_LIST = [
 let state = {
   aiList: [],
   settings: {
-    linkOpenMode: 'inside',
     defaultHome: 'https://chat.deepseek.com',
     theme: 'light'
   },
@@ -683,7 +682,6 @@ function setupEventListeners() {
     $('#settingsPanel').classList.toggle('hidden');
     updateBackdrop();
     $('#themeMode').value = state.settings.theme || 'light';
-    $('#linkOpenMode').value = state.settings.linkOpenMode;
     $('#defaultHome').value = state.settings.defaultHome;
   });
 
@@ -694,7 +692,6 @@ function setupEventListeners() {
 
   $('#saveSettings').addEventListener('click', () => {
     state.settings.theme = $('#themeMode').value;
-    state.settings.linkOpenMode = $('#linkOpenMode').value;
     state.settings.defaultHome = $('#defaultHome').value;
     saveState();
     applyTheme();
@@ -765,16 +762,6 @@ function setupEventListeners() {
   });
 
   window.addEventListener('message', (e) => {
-    if (e.data && e.data.action === 'linkClick') {
-      const url = e.data.url;
-      if (state.settings.linkOpenMode === 'inside') {
-        navigateTo(url);
-      } else {
-        window.open(url, '_blank');
-      }
-    }
-
-    // Handle URL changes from iframe (SPA navigation)
     if (e.data && e.data.action === 'urlChanged' && e.data.url) {
       const tab = getActiveTab();
       if (tab) {
