@@ -6,7 +6,8 @@
       "Bash(python3 *)",
       "Bash('#webview')",
       "Bash(grep -n \"webview\\\\|$\\('#webview'\\)\" sidebar.js)",
-      "Bash(node -c sidebar.js)"
+      "Bash(node -c sidebar.js)",
+      "WebSearch"
     ]
   }
 }

@@ -122,9 +122,7 @@ async function init() {
   $('#urlInput').value = activeTab?.url || state.settings.defaultHome;
   updateNavButtons();
   saveTabsState();
-  cleanupOldDrafts();
 
-  // Clean up legacy panelState data
   chrome.storage.local.remove('panelState');
 }
 
@@ -215,7 +213,6 @@ function saveCurrentTabState() {
   if (!tab) return;
   const iframe = getActiveIframe();
 
-  // Try to get current URL from iframe
   if (iframe) {
     try {
       const iframeUrl = iframe.contentWindow?.location?.href;
@@ -223,11 +220,10 @@ function saveCurrentTabState() {
         tab.url = iframeUrl;
       }
     } catch (e) {
-      // Cross-origin - use history URL
+      tab.url = state.history[state.historyIndex] || tab.url;
     }
   }
 
-  // Fallback to history URL
   if (!tab.url || tab.url === 'about:blank') {
     tab.url = state.history[state.historyIndex] || tab.url;
   }
@@ -434,7 +430,7 @@ function navigateTo(url, fromHistory) {
 
   $('#loading').classList.remove('hidden');
 
-  chrome.storage.local.set({ currentTabId: activeTab.id });
+  activeTab.url = url;
 
   setupIframeLoadHandler(activeTab.id);
   iframe.src = url;
@@ -524,20 +520,6 @@ function saveTabsState() {
     tabs: state.tabs,
     activeTabIndex: state.activeTabIndex
   });
-}
-
-async function cleanupOldDrafts() {
-  const result = await chrome.storage.local.get(null);
-  const keysToRemove = [];
-  const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  for (const [key, value] of Object.entries(result)) {
-    if (key.startsWith('draft_') && value?.timestamp && value.timestamp < oneWeekAgo) {
-      keysToRemove.push(key);
-    }
-  }
-  if (keysToRemove.length > 0) {
-    chrome.storage.local.remove(keysToRemove);
-  }
 }
 
 // --- Theme & UI ---
@@ -834,6 +816,14 @@ function setupEventListeners() {
     if (document.hidden) {
       savePanelState();
     }
+  });
+
+  window.addEventListener('beforeunload', () => {
+    savePanelState();
+  });
+
+  window.addEventListener('pagehide', () => {
+    savePanelState();
   });
 
   // Periodic save to ensure state is persisted
