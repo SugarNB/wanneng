@@ -409,11 +409,12 @@ function cropImage(dataUrl, rect) {
     );
 
     canvas.toBlob(async (blob) => {
+      const dataUrl = canvas.toDataURL('image/png');
       try {
         await navigator.clipboard.write([
           new ClipboardItem({ 'image/png': blob })
         ]);
-        showContentToast('已复制到剪贴板');
+        showContentToast('已复制到剪贴板，正在粘贴到输入框...');
       } catch (e) {
         const link = document.createElement('a');
         link.download = `screenshot-${Date.now()}.png`;
@@ -422,9 +423,91 @@ function cropImage(dataUrl, rect) {
         URL.revokeObjectURL(link.href);
         showContentToast('已保存为图片');
       }
+      if (window === window.top) {
+        chrome.runtime.sendMessage({ action: 'screenshotComplete', dataUrl });
+      }
     }, 'image/png');
   };
   img.src = dataUrl;
 }
+
+function findChatInput() {
+  const selectors = [
+    '[contenteditable="true"][role="textbox"]',
+    '[contenteditable="true"].ProseMirror',
+    '[contenteditable="true"]',
+    '[role="textbox"]',
+    'textarea:not([readonly])',
+    'input[type="text"]:not([readonly])'
+  ];
+  for (const sel of selectors) {
+    const els = document.querySelectorAll(sel);
+    for (const el of els) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) return el;
+    }
+  }
+  return null;
+}
+
+let lastPastedDataUrl = null;
+let pasteDebounceTimer = null;
+let isPasteInProgress = false;
+
+async function pasteImageToInput(dataUrl) {
+  if (isPasteInProgress) return;
+  if (lastPastedDataUrl === dataUrl) return;
+  lastPastedDataUrl = dataUrl;
+  isPasteInProgress = true;
+
+  if (pasteDebounceTimer) clearTimeout(pasteDebounceTimer);
+  pasteDebounceTimer = setTimeout(() => {
+    lastPastedDataUrl = null;
+    isPasteInProgress = false;
+  }, 3000);
+
+  const input = findChatInput();
+  if (!input) {
+    isPasteInProgress = false;
+    showContentToast('未找到输入框，请手动 Ctrl+V 粘贴');
+    return;
+  }
+
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const file = new File([blob], 'screenshot.png', { type: 'image/png' });
+
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    Object.defineProperty(dataTransfer, 'files', {
+      value: dataTransfer.files,
+      writable: false,
+      enumerable: true
+    });
+
+    input.focus();
+
+    const pasteEvent = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: dataTransfer
+    });
+
+    input.dispatchEvent(pasteEvent);
+
+    showContentToast('截图已粘贴到输入框');
+    isPasteInProgress = false;
+  } catch (e) {
+    isPasteInProgress = false;
+    showContentToast('自动粘贴失败，请手动 Ctrl+V 粘贴');
+  }
+}
+
+window.addEventListener('message', (event) => {
+  if (event.data?.action === 'pasteScreenshot' && event.data?.source === 'wanneng-sidebar' && event.data.dataUrl) {
+    pasteImageToInput(event.data.dataUrl);
+  }
+});
 
 

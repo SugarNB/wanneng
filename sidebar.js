@@ -924,9 +924,28 @@ async function viewPageSource() {
 }
 
 
+let lastSentDataUrl = null;
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'restoreState') {
     sendResponse({ state });
+  }
+
+  if (request.action === 'screenshotComplete' && request.dataUrl) {
+    if (lastSentDataUrl === request.dataUrl) return;
+    lastSentDataUrl = request.dataUrl;
+    setTimeout(() => { lastSentDataUrl = null; }, 3000);
+
+    const iframe = getActiveIframe();
+    if (iframe) {
+      iframe.contentWindow.postMessage({
+        action: 'pasteScreenshot',
+        dataUrl: request.dataUrl,
+        source: 'wanneng-sidebar'
+      }, '*');
+    } else {
+      showToast('截图已复制到剪贴板，请手动粘贴');
+    }
   }
 
   // Handle iframe navigation events from background script

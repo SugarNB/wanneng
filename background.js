@@ -25,6 +25,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true;
   }
+
+  if (request.action === 'screenshotComplete') {
+    chrome.runtime.sendMessage({
+      action: 'screenshotComplete',
+      dataUrl: request.dataUrl
+    }).catch(() => {});
+    return false;
+  }
 });
 
 // Listen for web navigation events to detect iframe URL changes
