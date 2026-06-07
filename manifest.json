@@ -12,10 +12,13 @@
     "scripting",
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess",
-    "webNavigation"
+    "webNavigation",
+    "cookies"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "*://*.xiaomimimo.com/*",
+    "*://*.mimo.com/*"
   ],
   "action": {
     "default_icon": {

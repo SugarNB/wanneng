@@ -10,7 +10,8 @@ const DEFAULT_AI_LIST = [
   { name: '智谱清言', url: 'https://chatglm.cn', icon: '🧠' },
   { name: '讯飞星火', url: 'https://xinghuo.xfyun.cn', icon: '🔥' },
   { name: '腾讯元宝', url: 'https://yuanbao.tencent.com', icon: '💎' },
-  { name: 'Poe', url: 'https://poe.com', icon: '🌐' }
+  { name: 'Poe', url: 'https://poe.com', icon: '🌐' },
+  { name: 'MiMo', url: 'https://aistudio.xiaomimimo.com', icon: 'Ⓜ️' }
 ];
 
 let state = {
