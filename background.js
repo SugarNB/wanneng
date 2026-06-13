@@ -1,5 +1,73 @@
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
+// ── 字幕 URL 捕获（按 tabId 存储）────────────────────────────────────
+const subtitleUrlMap = new Map(); // tabId → Set<url>
+
+const SUBTITLE_PATTERNS = [
+  /\.vtt(\?|$)/i, /\.srt(\?|$)/i, /\.ass(\?|$)/i,
+  /timedtext/i, /aisubtitle/i, /cc_vtt/i,
+  /subtitle(?!-settings)/i, /caption(?!-settings)/i,
+  /api\.bilibili\.com.*subtitle/i,
+  /bilibili\.com.*subtitle/i,
+  /youtube\.com.*timedtext/i,
+  /googlevideo\.com.*timedtext/i,
+];
+
+function isSubtitleUrl(url) {
+  if (!url) return false;
+  return SUBTITLE_PATTERNS.some(p => p.test(url));
+}
+
+// 使用 webRequest 捕获字幕请求
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (!isSubtitleUrl(details.url)) return;
+    if (!subtitleUrlMap.has(details.tabId)) {
+      subtitleUrlMap.set(details.tabId, new Set());
+    }
+    subtitleUrlMap.get(details.tabId).add(details.url);
+  },
+  { urls: ['<all_urls>'] }
+);
+
+// 标签页关闭时清理
+chrome.tabs.onRemoved.addListener((tabId) => {
+  subtitleUrlMap.delete(tabId);
+});
+
+// 标签页导航时清空旧字幕 URL
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status === 'loading') {
+    subtitleUrlMap.delete(tabId);
+  }
+});
+
+// ── 标签页切换检测 ───────────────────────────────────────────────────
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  try {
+    const tab = await chrome.tabs.get(activeInfo.tabId);
+    if (tab) {
+      chrome.runtime.sendMessage({
+        action: 'TAB_CHANGED',
+        tabId: activeInfo.tabId,
+        url: tab.url,
+        title: tab.title
+      }).catch(() => {});
+    }
+  } catch (e) {}
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url && tab.active) {
+    chrome.runtime.sendMessage({
+      action: 'TAB_CHANGED',
+      tabId: tabId,
+      url: changeInfo.url,
+      title: tab.title
+    }).catch(() => {});
+  }
+});
+
 // --- MiMo Cookie Fix ---
 // MiMo auth depends on: serviceToken, userId, xiaomichatbot_ph
 // These cookies may have SameSite=Lax which blocks them in iframe context.
@@ -99,6 +167,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       dataUrl: request.dataUrl
     }).catch(() => {});
     return false;
+  }
+
+  // ── 字幕 URL 获取（按 tabId 返回 webRequest 捕获的 URL）
+  if (request.action === 'GET_SUBTITLE_URLS') {
+    const tabId = request.tabId;
+    const urls = tabId && subtitleUrlMap.has(tabId)
+      ? [...subtitleUrlMap.get(tabId)]
+      : [];
+    sendResponse({ urls });
+    return true;
   }
 });
 

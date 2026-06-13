@@ -29,6 +29,14 @@ let state = {
   activeTabIndex: 0
 };
 
+// ── 字幕状态 ─────────────────────────────────────────────────────────
+let subtitleState = {
+  transcript: [],
+  platform: '',
+  source: '',
+  extracting: false
+};
+
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
@@ -122,6 +130,11 @@ async function init() {
   $('#urlInput').value = activeTab?.url || state.settings.defaultHome;
   updateNavButtons();
   saveTabsState();
+
+  // 检测主标签页视频平台
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0]?.url) checkVideoPlatform(tabs[0].url);
+  });
 
   chrome.storage.local.remove('panelState');
 }
@@ -762,6 +775,23 @@ function setupEventListeners() {
     $('#contentViewer').classList.add('hidden');
   });
 
+  // ── 字幕相关事件绑定 ──────────────────────────────────────────────
+  $('#extractSubtitleBtn').addEventListener('click', () => extractTranscript());
+
+  $('#transcriptCloseBtn').addEventListener('click', () => {
+    $('#transcriptPanel').classList.add('hidden');
+  });
+
+  $('#transcriptCopyBtn').addEventListener('click', () => {
+    if (!subtitleState.transcript.length) return;
+    const text = subtitleState.transcript
+      .map(s => s.start > 0 ? `[${formatTime(s.start)}] ${s.text}` : s.text)
+      .join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('字幕已复制到剪贴板');
+    });
+  });
+
   window.addEventListener('message', (e) => {
     if (e.data && e.data.action === 'urlChanged' && e.data.url) {
       const tab = getActiveTab();
@@ -975,6 +1005,374 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
     }
   }
+
+  // 主标签页切换或导航 → 检测视频平台
+  if (request.action === 'TAB_CHANGED' && request.url) {
+    checkVideoPlatform(request.url);
+  }
 });
+
+// ── 视频平台检测 ─────────────────────────────────────────────────────
+
+const VIDEO_PLATFORMS = [
+  { name: 'YouTube',  pattern: /youtube\.com\/watch|youtu\.be\//,   badge: '▶ YouTube' },
+  { name: 'Bilibili', pattern: /bilibili\.com\/video/,              badge: '📺 哔哩哔哩' },
+  { name: 'Douyin',   pattern: /douyin\.com|tiktok\.com/,           badge: '🎵 抖音/TikTok' },
+  { name: 'Weibo',    pattern: /weibo\.com\/tv/,                    badge: '微博视频' },
+  { name: 'Iqiyi',    pattern: /iqiyi\.com\/w_/,                    badge: '爱奇艺' },
+  { name: 'Youku',    pattern: /v\.youku\.com/,                     badge: '优酷' },
+  { name: 'Tencent',  pattern: /v\.qq\.com\/x\/cover/,              badge: '腾讯视频' },
+];
+
+function detectVideoPlatform(url) {
+  if (!url) return null;
+  for (const p of VIDEO_PLATFORMS) {
+    if (p.pattern.test(url)) return p;
+  }
+  return null;
+}
+
+function checkVideoPlatform(url) {
+  const btn = $('#extractSubtitleBtn');
+  if (!btn) return;
+  const platform = detectVideoPlatform(url);
+  if (!platform) {
+    btn.classList.add('hidden');
+    subtitleState = { transcript: [], platform: '', source: '', extracting: false };
+    return;
+  }
+  btn.classList.remove('hidden');
+  btn.title = `${platform.badge || platform.name} - 提取字幕`;
+  subtitleState.platform = platform.name;
+}
+
+// ── 字幕 URL 获取（多策略）───────────────────────────────────────────
+
+async function getSubtitleUrls(tabId, tabUrl) {
+  const urls = [];
+
+  // 策略1: background webRequest 已捕获的
+  try {
+    const resp = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ action: 'GET_SUBTITLE_URLS', tabId }, resolve);
+    });
+    if (resp?.urls?.length) urls.push(...resp.urls);
+  } catch (e) {}
+
+  // 策略2: MAIN world 注入脚本捕获的
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'MAIN',
+      func: () => window.__capturedSubtitles || []
+    });
+    const captured = res?.[0]?.result || [];
+    for (const u of captured) if (!urls.includes(u)) urls.push(u);
+  } catch (e) {}
+
+  // 策略3: YouTube 专属 — 读取 ytInitialPlayerResponse
+  if (/youtube\.com|youtu\.be/.test(tabUrl)) {
+    try {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'MAIN',
+        func: () => {
+          const pd = window.ytInitialPlayerResponse;
+          const tracks = pd?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+          if (!tracks?.length) return [];
+          return tracks.map(t => {
+            let url = t.baseUrl || '';
+            if (url && !url.includes('fmt=')) url += '&fmt=json3';
+            return url;
+          }).filter(Boolean);
+        }
+      });
+      const ytUrls = res?.[0]?.result || [];
+      for (const u of ytUrls) if (!urls.includes(u)) urls.push(u);
+    } catch (e) {}
+  }
+
+  // 策略4: Bilibili 专属 — 读取 __playinfo__ / __INITIAL_STATE__
+  if (/bilibili\.com/.test(tabUrl)) {
+    try {
+      const res = await chrome.scripting.executeScript({
+        target: { tabId }, world: 'MAIN',
+        func: () => {
+          const results = [];
+          // 方式1: __playinfo__
+          const pi = window.__playinfo__;
+          const subtitleInfo = pi?.data?.subtitle?.subtitles;
+          if (subtitleInfo?.length) {
+            subtitleInfo.forEach(s => {
+              if (s.subtitle_url) results.push(s.subtitle_url);
+              if (s.url) results.push(s.url);
+            });
+          }
+          // 方式2: __INITIAL_STATE__
+          const initialState = window.__INITIAL_STATE__;
+          const videoData = initialState?.videoData;
+          if (videoData?.subtitle?.list?.length) {
+            videoData.subtitle.list.forEach(s => {
+              if (s.subtitle_url) results.push(s.subtitle_url);
+            });
+          }
+          // 方式3: 从 script 标签中正则提取
+          const scripts = document.querySelectorAll('script');
+          scripts.forEach(script => {
+            const text = script.textContent || '';
+            const match = text.match(/"subtitle_url"\s*:\s*"([^"]+)"/g);
+            if (match) {
+              match.forEach(m => {
+                const url = m.match(/"subtitle_url"\s*:\s*"([^"]+)"/)?.[1];
+                if (url && !results.includes(url)) {
+                  results.push(url.replace(/\\u002F/g, '/'));
+                }
+              });
+            }
+          });
+          return results.filter(Boolean);
+        }
+      });
+      const biliUrls = res?.[0]?.result || [];
+      for (const u of biliUrls) if (!urls.includes(u)) urls.push(u);
+    } catch (e) {}
+  }
+
+  return urls;
+}
+
+// ── DOM 字幕兜底 ─────────────────────────────────────────────────────
+
+async function extractDomSubtitle(tabId) {
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId }, world: 'ISOLATED',
+      func: () => {
+        const ytSegs = document.querySelectorAll('.ytp-caption-segment');
+        if (ytSegs.length) {
+          return { text: [...ytSegs].map(el => el.innerText).join(' '), source: 'DOM(当前字幕)' };
+        }
+        const generic = document.querySelector(
+          '[class*="subtitle"],[class*="caption"],[class*="danmaku"],[id*="subtitle"],[id*="caption"]'
+        );
+        if (generic?.innerText?.trim()) {
+          return { text: generic.innerText.trim(), source: 'DOM(字幕层)' };
+        }
+        return null;
+      }
+    });
+    return res?.[0]?.result || null;
+  } catch (e) { return null; }
+}
+
+// ── 字幕格式解析 ─────────────────────────────────────────────────────
+
+function parseVTT(text) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const segs = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (/^\d{1,2}:\d{2}[\d:.,]/.test(line) && line.includes('-->')) {
+      const start = vttTimeToSec(line.split('-->')[0].trim());
+      const textLines = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== '') {
+        textLines.push(lines[i].replace(/<[^>]+>/g, '').trim());
+        i++;
+      }
+      const t = textLines.join(' ').trim();
+      if (t) segs.push({ start, text: t });
+    } else { i++; }
+  }
+  return dedup(segs);
+}
+
+function parseSRT(text) {
+  const blocks = text.replace(/\r\n/g, '\n').split(/\n\n+/);
+  const segs = [];
+  for (const block of blocks) {
+    const lines = block.trim().split('\n');
+    if (lines.length < 3) continue;
+    const timeLine = lines.find(l => l.includes('-->'));
+    if (!timeLine) continue;
+    const start = vttTimeToSec(timeLine.split('-->')[0].trim());
+    const t = lines.slice(lines.indexOf(timeLine) + 1)
+      .join(' ').replace(/<[^>]+>/g, '').trim();
+    if (t) segs.push({ start, text: t });
+  }
+  return dedup(segs);
+}
+
+function parseJSON3(data) {
+  // YouTube json3 格式
+  if (data.events) {
+    return data.events
+      .filter(e => e.segs)
+      .map(e => ({
+        start: (e.tStartMs || 0) / 1000,
+        text: e.segs.map(s => s.utf8 || '').join('').trim()
+      }))
+      .filter(s => s.text);
+  }
+  // 抖音 utterances 格式
+  if (data.utterances) {
+    return data.utterances.map(u => ({
+      start: (u.start_time || 0) / 1000,
+      text: (u.words || []).map(w => w.text).join('')
+    })).filter(s => s.text);
+  }
+  // Bilibili 格式
+  if (Array.isArray(data.body)) {
+    return data.body.map(item => ({
+      start: item.from || 0,
+      text: item.content || ''
+    })).filter(s => s.text);
+  }
+  return [];
+}
+
+function vttTimeToSec(ts) {
+  ts = ts.replace(',', '.');
+  const parts = ts.split(':');
+  if (parts.length === 3) return +parts[0] * 3600 + +parts[1] * 60 + parseFloat(parts[2]);
+  if (parts.length === 2) return +parts[0] * 60 + parseFloat(parts[1]);
+  return parseFloat(parts[0]);
+}
+
+function dedup(segs) {
+  return segs.filter((s, i) => i === 0 || s.text !== segs[i - 1].text);
+}
+
+function formatTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// ── 主提取函数 ───────────────────────────────────────────────────────
+
+async function extractTranscript() {
+  if (subtitleState.extracting) return;
+  subtitleState.extracting = true;
+
+  openTranscriptPanel(true);
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('无法获取当前标签页');
+    const tabUrl = tab.url || '';
+
+    const subtitleUrls = await getSubtitleUrls(tab.id, tabUrl);
+    let segments = [];
+    let source = '';
+
+    // 优先解析已捕获的字幕 URL
+    for (const url of subtitleUrls) {
+      try {
+        const fetchUrl = url.startsWith('//') ? 'https:' + url : url;
+        const resp = await fetch(fetchUrl);
+        if (!resp.ok) continue;
+        const ct = resp.headers.get('content-type') || '';
+        const text = await resp.text();
+
+        if (ct.includes('json') || text.trim().startsWith('{') || text.trim().startsWith('[')) {
+          try {
+            const data = JSON.parse(text);
+            segments = parseJSON3(data);
+            source = 'JSON 字幕';
+          } catch (e) {}
+        } else if (text.includes('WEBVTT') || /\d{2}:\d{2}/.test(text.slice(0, 200))) {
+          if (text.includes('-->')) {
+            segments = text.includes('WEBVTT') ? parseVTT(text) : parseSRT(text);
+            source = text.includes('WEBVTT') ? 'VTT 字幕' : 'SRT 字幕';
+          }
+        }
+        if (segments.length) break;
+      } catch (e) { continue; }
+    }
+
+    // URL 方式失败 → 尝试 DOM 兜底
+    if (!segments.length) {
+      const dom = await extractDomSubtitle(tab.id);
+      if (dom?.text) {
+        segments = [{ start: 0, text: dom.text }];
+        source = dom.source;
+      }
+    }
+
+    if (!segments.length) {
+      throw new Error('未找到字幕。请确认视频已开启字幕，或在视频平台上选择字幕语言后重试。');
+    }
+
+    subtitleState.transcript = segments;
+    subtitleState.source = source;
+    renderTranscriptContent(segments, source);
+    showToast(`✅ 提取到 ${segments.length} 条字幕（${source}）`);
+
+  } catch (err) {
+    renderTranscriptError(err.message);
+    showToast('❌ ' + err.message);
+  } finally {
+    subtitleState.extracting = false;
+  }
+}
+
+// ── 字幕面板渲染 ─────────────────────────────────────────────────────
+
+function openTranscriptPanel(loading = false) {
+  const panel = $('#transcriptPanel');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  if (loading) {
+    $('#transcriptContent').innerHTML = `
+      <div class="transcript-loading">
+        <div class="thinking-dot"></div>
+        <div class="thinking-dot"></div>
+        <div class="thinking-dot"></div>
+        <span>正在提取字幕，请稍候…</span>
+      </div>`;
+    $('#transcriptCount').textContent = '';
+  }
+}
+
+function renderTranscriptContent(segments, source) {
+  const content = $('#transcriptContent');
+  if (!content) return;
+
+  function escHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  const badge = `<div class="transcript-source-badge">📡 来源：${escHtml(source)}</div>`;
+
+  if (segments.length === 1 && segments[0].start === 0) {
+    content.innerHTML = badge + `<div class="transcript-plain">${escHtml(segments[0].text)}</div>`;
+  } else {
+    const rows = segments.map(s =>
+      `<div class="transcript-segment">
+        <span class="transcript-time">${formatTime(s.start)}</span>
+        <span class="transcript-text">${escHtml(s.text)}</span>
+      </div>`
+    ).join('');
+    content.innerHTML = badge + rows;
+  }
+
+  $('#transcriptCount').textContent = `${segments.length} 条`;
+}
+
+function renderTranscriptError(msg) {
+  const content = $('#transcriptContent');
+  if (!content) return;
+  content.innerHTML = `
+    <div class="transcript-empty">
+      <div class="transcript-empty-icon">🔍</div>
+      <div>${msg}</div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:4px">
+        提示：播放视频并开启平台字幕后再次尝试
+      </div>
+    </div>`;
+  $('#transcriptCount').textContent = '';
+}
 
 init();

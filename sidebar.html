@@ -20,6 +20,11 @@
         <h1 class="logo">万能侧边栏</h1>
       </div>
       <div class="header-right">
+        <button id="extractSubtitleBtn" class="icon-btn subtitle-icon hidden" title="提取字幕">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M2 4h20v1.5H2V4zm0 5h14v1.5H2V9zm0 5h10v1.5H2V14z"></path>
+          </svg>
+        </button>
         <button id="extractContent" class="icon-btn" title="提取网页内容">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -168,6 +173,22 @@
         </div>
       </div>
       <div id="contentText" class="content-text"></div>
+    </div>
+
+    <div id="transcriptPanel" class="transcript-panel hidden">
+      <div class="transcript-header">
+        <span>📋 字幕内容 <span id="transcriptCount" class="transcript-count"></span></span>
+        <div class="transcript-header-actions">
+          <button id="transcriptCopyBtn" class="btn-secondary small" title="复制字幕">📋 复制</button>
+          <button id="transcriptCloseBtn" class="icon-btn small" title="关闭">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id="transcriptContent" class="transcript-content"></div>
     </div>
 
     <div id="addAiModal" class="modal hidden">
