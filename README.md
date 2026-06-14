@@ -1,5 +1,7 @@
 # 万能侧边栏
 
+> [English Version](README_EN.md)
+
 一个浏览器侧边栏扩展，理论上支持将任何AI聊天平台集成到侧边栏中，支持Chrome/Edge。
 
 ## 💡 使用方式
